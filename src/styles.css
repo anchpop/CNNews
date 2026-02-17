@@ -23,3 +23,40 @@ body {
   @apply bg-background text-foreground min-h-screen;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
+
+/* Markdown prose styling for digest content */
+.digest-prose ul {
+  @apply list-disc pl-5 my-2 space-y-1;
+}
+
+.digest-prose ol {
+  @apply list-decimal pl-5 my-2 space-y-1;
+}
+
+.digest-prose p {
+  @apply my-2;
+}
+
+.digest-prose p:first-child {
+  @apply mt-0;
+}
+
+.digest-prose p:last-child {
+  @apply mb-0;
+}
+
+.digest-prose strong {
+  @apply font-semibold text-foreground;
+}
+
+.digest-prose a {
+  @apply text-muted-foreground underline hover:text-foreground transition-colors;
+}
+
+.digest-prose code {
+  @apply bg-muted px-1.5 py-0.5 rounded text-sm;
+}
+
+.digest-prose blockquote {
+  @apply border-l-2 border-border pl-3 my-2 text-muted-foreground italic;
+}

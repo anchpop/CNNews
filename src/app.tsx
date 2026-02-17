@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import YProvider from "y-partyserver/provider";
 import * as Y from "yjs";
+import { marked } from "marked";
 import { Mail, Plus, X, Zap, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "./components/ui/card";
@@ -389,7 +390,7 @@ export function App({ digestId }: { digestId: string }) {
                         </div>
                       </CollapsibleTrigger>
                       <CollapsibleContent>
-                        <div className="bg-background rounded-lg p-3 mb-4 text-sm leading-relaxed">
+                        <div className="bg-background rounded-lg p-3 mb-4 text-sm leading-relaxed digest-prose">
                           {d.sections.map((s, si) => (
                             <div key={si}>
                               <div className="text-primary font-semibold mt-3 mb-1 first:mt-0">
@@ -397,10 +398,7 @@ export function App({ digestId }: { digestId: string }) {
                               </div>
                               <div
                                 dangerouslySetInnerHTML={{
-                                  __html: escapeHtml(s.content).replace(
-                                    /\n/g,
-                                    "<br>"
-                                  ),
+                                  __html: marked.parse(s.content.trim(), { async: false }) as string,
                                 }}
                               />
                             </div>
@@ -419,8 +417,3 @@ export function App({ digestId }: { digestId: string }) {
   );
 }
 
-function escapeHtml(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}

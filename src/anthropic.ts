@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { marked } from "marked";
 import type { Digest, DigestSection } from "./types";
 
 export async function generateDigest(
@@ -107,7 +108,7 @@ function renderDigestHtml(
       (s) => `
     <div style="margin-bottom:28px;">
       <h2 style="color:#e67e22;font-size:20px;margin:0 0 12px 0;border-bottom:2px solid #f0f0f0;padding-bottom:8px;">${escapeHtml(s.title)}</h2>
-      <div style="color:#333;font-size:15px;line-height:1.7;">${markdownToHtml(s.content)}</div>
+      <div style="color:#333;font-size:15px;line-height:1.7;">${markdownToHtml(s.content.trim())}</div>
     </div>`
     )
     .join("");
@@ -146,8 +147,5 @@ function escapeHtml(s: string): string {
 }
 
 function markdownToHtml(text: string): string {
-  return escapeHtml(text)
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\n- /g, "\n&bull; ")
-    .replace(/\n/g, "<br>");
+  return marked.parse(text, { async: false }) as string;
 }
