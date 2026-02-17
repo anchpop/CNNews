@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import YProvider from "y-partyserver/provider";
 import * as Y from "yjs";
 import { marked } from "marked";
-import { Mail, Plus, X, Zap, ChevronDown, ChevronRight } from "lucide-react";
+import { Mail, Plus, X, Zap, ChevronDown, ChevronRight, MailCheck } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "./components/ui/card";
 import { Input } from "./components/ui/input";
@@ -52,6 +52,8 @@ export function App({ digestId }: { digestId: string }) {
   const [savedEmail, setSavedEmail] = useState("");
   const [editing, setEditing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
   const [synced, setSynced] = useState(false);
   const [openDigests, setOpenDigests] = useState<Set<number>>(new Set());
 
@@ -80,6 +82,7 @@ export function App({ digestId }: { digestId: string }) {
       const e = (config.get("email") as string) || "";
       const en = (config.get("enabled") as boolean) || false;
       const freq = (config.get("frequency") as Frequency) || "daily";
+      const conf = (config.get("confirmed") as boolean) || false;
       setSavedEmail(e);
       // Only update email input if user isn't actively editing
       if (document.activeElement !== emailInputRef.current && e) {
@@ -87,6 +90,7 @@ export function App({ digestId }: { digestId: string }) {
       }
       setEnabled(en);
       setFrequency(freq);
+      setConfirmed(conf);
     }
 
     function syncTopics() {
@@ -115,6 +119,7 @@ export function App({ digestId }: { digestId: string }) {
         if (data.ok) {
           setTriggerStatus({ msg: "Digest generated and sent!", ok: true });
         } else {
+          setVerificationSent(false);
           setTriggerStatus({ msg: data.error || "Failed", ok: false });
         }
       }
@@ -165,13 +170,21 @@ export function App({ digestId }: { digestId: string }) {
     configRef.current?.set("frequency", freq);
   }, []);
 
-  const triggerDigest = useCallback(() => {
+  const triggerDigest = useCallback((isVerification = false) => {
     if (!providerRef.current) return;
     setGenerating(true);
-    setTriggerStatus({
-      msg: "This may take a minute while Claude researches your topics...",
-      ok: true,
-    });
+    if (isVerification) {
+      setVerificationSent(true);
+      setTriggerStatus({
+        msg: "Sending your verification email — check your inbox in a moment!",
+        ok: true,
+      });
+    } else {
+      setTriggerStatus({
+        msg: "This may take a minute while Claude researches your topics...",
+        ok: true,
+      });
+    }
     providerRef.current.sendMessage(JSON.stringify({ type: "trigger" }));
   }, []);
 
@@ -206,6 +219,24 @@ export function App({ digestId }: { digestId: string }) {
 
       {synced && (
         <div className="space-y-5">
+          {/* Confirmation banner */}
+          {savedEmail && !confirmed && (
+            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-500 p-5 flex gap-4 items-start">
+              <MailCheck className="h-6 w-6 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-amber-900 dark:text-amber-200 text-sm">
+                  Please verify your email address
+                </p>
+                <p className="text-amber-800 dark:text-amber-300 text-sm mt-1">
+                  {verificationSent
+                    ? <>A verification email was sent to <strong>{savedEmail}</strong>. Click the link inside to confirm and start receiving digests.</>
+                    : <>Your digests won't be sent until you verify <strong>{savedEmail}</strong>. Use the button below to send a verification email.</>
+                  }
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Email Card */}
           <Card>
             <CardHeader>
@@ -339,12 +370,24 @@ export function App({ digestId }: { digestId: string }) {
                 </div>
               )}
               <div>
-                <Button
-                  onClick={triggerDigest}
-                  disabled={generating}
-                >
-                  {generating ? "Generating..." : "Generate Digest Now"}
-                </Button>
+                {!confirmed && savedEmail ? (
+                  <Button
+                    onClick={() => triggerDigest(true)}
+                    disabled={generating || verificationSent}
+                    variant="outline"
+                    className="border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-500 dark:hover:bg-amber-950/30"
+                  >
+                    <MailCheck className="h-4 w-4 mr-2" />
+                    {generating ? "Sending..." : verificationSent ? "Verification email sent" : "Send Verification Email"}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => triggerDigest(false)}
+                    disabled={generating}
+                  >
+                    {generating ? "Generating..." : "Generate Digest Now"}
+                  </Button>
+                )}
                 {triggerStatus && (
                   <p
                     className={`text-sm mt-2 ${triggerStatus.ok ? "text-success" : "text-destructive"}`}
