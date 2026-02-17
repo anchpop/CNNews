@@ -2,3 +2,5 @@ node_modules/
 .dev.vars
 .wrangler/
 dist/
+public/client.js
+public/style.css
