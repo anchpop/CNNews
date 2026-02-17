@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 
-const FROM_ADDRESS = "news@chadnauseam.com";
+const FROM_ADDRESS = "news@news.chadnauseam.com";
 
 export async function sendDigestEmail(
   apiKey: string,
