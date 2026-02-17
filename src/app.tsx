@@ -142,6 +142,8 @@ export function App({ digestId }: { digestId: string }) {
     });
     setSavedEmail(trimmed);
     setEditing(false);
+    setVerificationSent(false);
+    setTriggerStatus(null);
     setEmailStatus({ msg: "Saved!", ok: true });
     setTimeout(() => setEmailStatus(null), 3000);
   }, [email]);

@@ -9,18 +9,39 @@ const DIGEST_CONTEXT_COUNT = 3;
 const ALARM_HOUR_UTC = 8;
 
 export class DigestObject extends YServer<Env> {
+  private lastKnownEmail: string | null = null;
+
   async onLoad() {
     const stored = (await this.ctx.storage.get("doc")) as
       | Uint8Array
       | undefined;
     if (stored) Y.applyUpdate(this.document, new Uint8Array(stored));
 
-    // Watch config changes for alarm scheduling
+    this.lastKnownEmail = this.getEmail();
+
+    // Watch config changes for alarm scheduling + email change detection
     this.document.getMap("config").observe(() => {
       this.syncAlarmState().catch((e) =>
         console.error("Alarm sync error:", e)
       );
+      this.checkEmailChanged().catch((e) =>
+        console.error("Email change check error:", e)
+      );
     });
+  }
+
+  private async checkEmailChanged(): Promise<void> {
+    const currentEmail = this.getEmail();
+    if (currentEmail !== this.lastKnownEmail) {
+      this.lastKnownEmail = currentEmail;
+      // Email changed — reset confirmation and invalidate token
+      if (this.isConfirmed()) {
+        this.document.transact(() => {
+          this.document.getMap("config").set("confirmed", false);
+        });
+      }
+      await this.ctx.storage.delete("confirmToken");
+    }
   }
 
   async onSave() {
