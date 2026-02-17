@@ -10,7 +10,7 @@ export async function sendDigestEmail(
 ): Promise<{ success: boolean; error?: string }> {
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
-    from: `TellyTax <${FROM_ADDRESS}>`,
+    from: `news.chadnauseam.com <${FROM_ADDRESS}>`,
     to,
     subject,
     html,

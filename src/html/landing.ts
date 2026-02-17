@@ -4,13 +4,13 @@ export function landingPage(existingDigestId?: string | null): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TellyTax - Daily AI News Digest</title>
+  <title>news.chadnauseam.com - Daily AI News Digest</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="max-w-2xl mx-auto px-5 py-10">
     <div class="text-center pt-16 pb-10">
-      <h1 class="text-5xl font-bold text-primary mb-3 tracking-tight">TellyTax</h1>
+      <h1 class="text-3xl sm:text-4xl font-bold text-primary mb-3 tracking-tight">news.chadnauseam.com</h1>
       <p class="text-xl text-muted-foreground mb-4">Your personal AI-curated news digest, delivered daily.</p>
       <p class="text-muted-foreground max-w-lg mx-auto mb-8 leading-relaxed">Pick your topics, get a beautifully crafted email every morning with Big Picture analysis, weekly trends, and today&rsquo;s updates &mdash; all researched by AI.</p>
       <div class="flex flex-col sm:flex-row items-center justify-center gap-3">

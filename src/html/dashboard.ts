@@ -4,7 +4,7 @@ export function dashboardPage(id: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TellyTax - Dashboard</title>
+  <title>news.chadnauseam.com - Dashboard</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
