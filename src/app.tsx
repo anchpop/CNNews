@@ -24,11 +24,21 @@ interface DigestEntry {
   sections: DigestSection[];
 }
 
+type Frequency = "daily" | "every_other_day" | "weekly" | "biweekly";
+
+const FREQUENCY_OPTIONS: { value: Frequency; label: string }[] = [
+  { value: "daily", label: "Daily" },
+  { value: "every_other_day", label: "Every other day" },
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Biweekly" },
+];
+
 export function App({ digestId }: { digestId: string }) {
   const [email, setEmail] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
   const [digests, setDigests] = useState<DigestEntry[]>([]);
   const [enabled, setEnabled] = useState(false);
+  const [frequency, setFrequency] = useState<Frequency>("daily");
   const [topicInput, setTopicInput] = useState("");
   const [emailStatus, setEmailStatus] = useState<{
     msg: string;
@@ -68,12 +78,14 @@ export function App({ digestId }: { digestId: string }) {
     function syncConfig() {
       const e = (config.get("email") as string) || "";
       const en = (config.get("enabled") as boolean) || false;
+      const freq = (config.get("frequency") as Frequency) || "daily";
       setSavedEmail(e);
       // Only update email input if user isn't actively editing
       if (document.activeElement !== emailInputRef.current && e) {
         setEmail(e);
       }
       setEnabled(en);
+      setFrequency(freq);
     }
 
     function syncTopics() {
@@ -147,6 +159,10 @@ export function App({ digestId }: { digestId: string }) {
     },
     []
   );
+
+  const changeFrequency = useCallback((freq: Frequency) => {
+    configRef.current?.set("frequency", freq);
+  }, []);
 
   const triggerDigest = useCallback(() => {
     if (!providerRef.current) return;
@@ -291,29 +307,51 @@ export function App({ digestId }: { digestId: string }) {
                 Controls
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-5 flex-wrap">
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-foreground">Email notifications</span>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Switch
+                    checked={enabled}
+                    onCheckedChange={toggleEnabled}
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    {enabled ? "On" : "Off"}
+                  </span>
+                </label>
+              </div>
+              {enabled && (
+                <div>
+                  <span className="text-sm text-muted-foreground mb-2 block">Frequency</span>
+                  <div className="flex gap-2 flex-wrap">
+                    {FREQUENCY_OPTIONS.map((opt) => (
+                      <Button
+                        key={opt.value}
+                        size="sm"
+                        variant={frequency === opt.value ? "default" : "outline"}
+                        onClick={() => changeFrequency(opt.value)}
+                      >
+                        {opt.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
                 <Button
                   onClick={triggerDigest}
                   disabled={generating}
                 >
                   {generating ? "Generating..." : "Generate Digest Now"}
                 </Button>
-                <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-                  <Switch
-                    checked={enabled}
-                    onCheckedChange={toggleEnabled}
-                  />
-                  Daily emails enabled
-                </label>
+                {triggerStatus && (
+                  <p
+                    className={`text-sm mt-2 ${triggerStatus.ok ? "text-success" : "text-destructive"}`}
+                  >
+                    {triggerStatus.msg}
+                  </p>
+                )}
               </div>
-              {triggerStatus && (
-                <p
-                  className={`text-sm mt-2 ${triggerStatus.ok ? "text-success" : "text-destructive"}`}
-                >
-                  {triggerStatus.msg}
-                </p>
-              )}
             </CardContent>
           </Card>
 

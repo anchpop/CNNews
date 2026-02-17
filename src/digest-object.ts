@@ -45,23 +45,48 @@ export class DigestObject extends YServer<Env> {
     return (this.document.getMap("config").get("enabled") as boolean) ?? false;
   }
 
+  private getFrequency(): string {
+    return (this.document.getMap("config").get("frequency") as string) ?? "daily";
+  }
+
+  private frequencyDays(): number {
+    switch (this.getFrequency()) {
+      case "every_other_day": return 2;
+      case "weekly": return 7;
+      case "biweekly": return 14;
+      default: return 1;
+    }
+  }
+
   // --- Alarm management ---
+
+  private lastScheduledFrequency: string | null = null;
 
   private async syncAlarmState(): Promise<void> {
     const enabled = this.isEnabled();
+    const freq = this.getFrequency();
     const alarm = await this.ctx.storage.getAlarm();
-    if (enabled && !alarm) {
-      await this.scheduleNextAlarm();
-    } else if (!enabled && alarm) {
+
+    if (!enabled && alarm) {
       await this.ctx.storage.deleteAlarm();
+      this.lastScheduledFrequency = null;
+    } else if (enabled && !alarm) {
+      await this.scheduleNextAlarm();
+      this.lastScheduledFrequency = freq;
+    } else if (enabled && alarm && this.lastScheduledFrequency !== freq) {
+      // Frequency changed — reschedule
+      await this.scheduleNextAlarm();
+      this.lastScheduledFrequency = freq;
     }
   }
 
   private async scheduleNextAlarm(): Promise<void> {
+    const days = this.frequencyDays();
     const now = new Date();
     const next = new Date(now);
     next.setUTCHours(ALARM_HOUR_UTC, 0, 0, 0);
-    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    if (next <= now) next.setUTCDate(next.getUTCDate() + days);
+    else if (days > 1) next.setUTCDate(next.getUTCDate() + days - 1);
     await this.ctx.storage.setAlarm(next.getTime());
   }
 
