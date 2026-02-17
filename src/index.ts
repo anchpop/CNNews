@@ -48,6 +48,18 @@ export default {
       });
     }
 
+    // Confirm subscription — /d/:uuid/confirm
+    const confirmMatch = path.match(/^\/d\/([a-f0-9-]{36})\/confirm$/);
+    if (confirmMatch && method === "GET") {
+      const uuid = confirmMatch[1];
+      const id = env.DIGEST_OBJECT.idFromName(uuid);
+      const stub = env.DIGEST_OBJECT.get(id);
+      // Forward to DO as a party request on its internal path
+      const doUrl = new URL(request.url);
+      doUrl.pathname = `/parties/digest-object/${uuid}/confirm`;
+      return stub.fetch(new Request(doUrl.toString(), request));
+    }
+
     // Party routes — /parties/digest-object/{room}/...
     const partyResponse = await routePartykitRequest(request, env);
     if (partyResponse) return partyResponse;

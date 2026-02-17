@@ -15,6 +15,7 @@ export interface DigestState {
   topics: string[];
   digests: Digest[];
   enabled: boolean;
+  confirmed: boolean;
 }
 
 export interface Env {

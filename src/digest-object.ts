@@ -2,7 +2,7 @@ import { YServer } from "y-partyserver";
 import * as Y from "yjs";
 import type { Env, Digest } from "./types";
 import { generateDigest } from "./anthropic";
-import { sendDigestEmail } from "./resend";
+import { sendDigestEmail, sendConfirmationEmail } from "./resend";
 
 const MAX_DIGESTS = 30;
 const DIGEST_CONTEXT_COUNT = 3;
@@ -49,6 +49,10 @@ export class DigestObject extends YServer<Env> {
     return (this.document.getMap("config").get("frequency") as string) ?? "daily";
   }
 
+  private isConfirmed(): boolean {
+    return (this.document.getMap("config").get("confirmed") as boolean) ?? false;
+  }
+
   private frequencyDays(): number {
     switch (this.getFrequency()) {
       case "every_other_day": return 2;
@@ -91,6 +95,13 @@ export class DigestObject extends YServer<Env> {
   }
 
   async onAlarm(): Promise<void> {
+    if (!this.isConfirmed()) {
+      // Not yet confirmed — skip digest but keep alarm so we retry tomorrow
+      if (this.isEnabled()) {
+        await this.scheduleNextAlarm();
+      }
+      return;
+    }
     try {
       await this.runDigest();
     } catch (e) {
@@ -130,12 +141,25 @@ export class DigestObject extends YServer<Env> {
     });
 
     if (email) {
-      const result = await sendDigestEmail(
-        this.env.RESEND_API_KEY,
-        email,
-        digest.subject,
-        digest.html
-      );
+      const confirmed = this.isConfirmed();
+      let result: { success: boolean; error?: string };
+      if (!confirmed) {
+        const confirmUrl = `${this.getDashboardUrl()}/confirm`;
+        result = await sendConfirmationEmail(
+          this.env.RESEND_API_KEY,
+          email,
+          confirmUrl,
+          digest.subject,
+          digest.html
+        );
+      } else {
+        result = await sendDigestEmail(
+          this.env.RESEND_API_KEY,
+          email,
+          digest.subject,
+          digest.html
+        );
+      }
       if (!result.success) console.error("Email send failed:", result.error);
     }
 
@@ -169,7 +193,18 @@ export class DigestObject extends YServer<Env> {
     }
   }
 
-  async onRequest(_request: Request): Promise<Response> {
+  async onRequest(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/confirm") && request.method === "GET") {
+      if (!this.isConfirmed()) {
+        this.document.transact(() => {
+          this.document.getMap("config").set("confirmed", true);
+        });
+      }
+      // Redirect to dashboard
+      const dashboardUrl = this.getDashboardUrl();
+      return Response.redirect(dashboardUrl, 302);
+    }
     return new Response("Not found", { status: 404 });
   }
 }

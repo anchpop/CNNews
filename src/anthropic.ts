@@ -62,6 +62,11 @@ Respond with ONLY a JSON object (no markdown fences):
           name: "web_search",
           max_uses: 30,
         },
+        {
+          type: "web_fetch_20250305",
+          name: "web_fetch",
+          max_uses: 30,
+        },
       ],
       messages,
     });
