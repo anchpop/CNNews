@@ -52,10 +52,11 @@ Respond with ONLY a JSON object (no markdown fences):
   ];
 
   while (true) {
-    const response = await client.messages.create({
+    const response = await client.beta.messages.create({
       model: "claude-opus-4-6",
       max_tokens: 16000,
       system: systemPrompt,
+      betas: ["web-fetch-2025-09-10"],
       tools: [
         {
           type: "web_search_20250305",
@@ -63,7 +64,7 @@ Respond with ONLY a JSON object (no markdown fences):
           max_uses: 30,
         },
         {
-          type: "web_fetch_20250305",
+          type: "web_fetch_20250910",
           name: "web_fetch",
           max_uses: 30,
         },
