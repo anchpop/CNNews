@@ -119,6 +119,14 @@ export class DigestObject extends YServer<Env> {
     return `https://tellytax.nauseam.workers.dev/d/${this.name}`;
   }
 
+  private async getOrCreateConfirmToken(): Promise<string> {
+    const existing = await this.ctx.storage.get<string>("confirmToken");
+    if (existing) return existing;
+    const token = crypto.randomUUID();
+    await this.ctx.storage.put("confirmToken", token);
+    return token;
+  }
+
   private async runDigest(): Promise<Digest> {
     const topics = this.getTopics();
     const email = this.getEmail();
@@ -144,7 +152,9 @@ export class DigestObject extends YServer<Env> {
       const confirmed = this.isConfirmed();
       let result: { success: boolean; error?: string };
       if (!confirmed) {
-        const confirmUrl = `${this.getDashboardUrl()}/confirm`;
+        // Token is stored only in DO storage — never exposed to the Yjs client
+        const token = await this.getOrCreateConfirmToken();
+        const confirmUrl = `https://tellytax.nauseam.workers.dev/confirm/${this.name}/${token}`;
         result = await sendConfirmationEmail(
           this.env.RESEND_API_KEY,
           email,
@@ -195,15 +205,20 @@ export class DigestObject extends YServer<Env> {
 
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname.endsWith("/confirm") && request.method === "GET") {
+    // Path: /parties/digest-object/:uuid/confirm/:token
+    const confirmMatch = url.pathname.match(/\/confirm\/([a-f0-9-]+)$/);
+    if (confirmMatch && request.method === "GET") {
+      const providedToken = confirmMatch[1];
+      const storedToken = await this.ctx.storage.get<string>("confirmToken");
+      if (!storedToken || providedToken !== storedToken) {
+        return new Response("Invalid or expired confirmation link.", { status: 403 });
+      }
       if (!this.isConfirmed()) {
         this.document.transact(() => {
           this.document.getMap("config").set("confirmed", true);
         });
       }
-      // Redirect to dashboard
-      const dashboardUrl = this.getDashboardUrl();
-      return Response.redirect(dashboardUrl, 302);
+      return Response.redirect(this.getDashboardUrl(), 302);
     }
     return new Response("Not found", { status: 404 });
   }
