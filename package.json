@@ -1,0 +1,30 @@
+{
+  "name": "tellytax",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/client.js --bundle --outfile=public/client.js --format=esm --target=es2020",
+    "dev": "pnpm build && wrangler dev",
+    "deploy": "pnpm build && wrangler deploy",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "partyserver": "^0.1.5",
+    "resend": "^4.1.0",
+    "y-partyserver": "^1.0.0",
+    "yjs": "^13.6.29"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.7.3",
+    "wrangler": "^3.109.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  }
+}

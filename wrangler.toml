@@ -1,0 +1,16 @@
+name = "tellytax"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat_v2"]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "DIGEST_OBJECT"
+class_name = "DigestObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DigestObject"]
