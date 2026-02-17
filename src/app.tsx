@@ -191,7 +191,7 @@ export function App({ digestId }: { digestId: string }) {
       {/* Header */}
       <header className="flex items-center justify-between mb-8 pb-4 border-b border-border">
         <a href="/" className="text-primary text-2xl font-bold no-underline">
-          news.chadnauseam.com
+          Nauseam News
         </a>
         <span className="text-muted-foreground text-sm font-mono">
           ID: {digestId.slice(0, 8)}&hellip;

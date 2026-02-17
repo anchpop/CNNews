@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 
-const FROM_ADDRESS = "update@news.chadnauseam.com";
+const FROM_ADDRESS = "update@Nauseam News";
 
 export async function sendDigestEmail(
   apiKey: string,
@@ -10,7 +10,7 @@ export async function sendDigestEmail(
 ): Promise<{ success: boolean; error?: string }> {
   const resend = new Resend(apiKey);
   const { error } = await resend.emails.send({
-    from: `news.chadnauseam.com <${FROM_ADDRESS}>`,
+    from: `Nauseam News <${FROM_ADDRESS}>`,
     to,
     subject,
     html,
