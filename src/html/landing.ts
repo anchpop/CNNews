@@ -1,4 +1,4 @@
-export function landingPage(): string {
+export function landingPage(existingDigestId?: string | null): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,7 +13,10 @@ export function landingPage(): string {
       <h1 class="text-5xl font-bold text-primary mb-3 tracking-tight">TellyTax</h1>
       <p class="text-xl text-muted-foreground mb-4">Your personal AI-curated news digest, delivered daily.</p>
       <p class="text-muted-foreground max-w-lg mx-auto mb-8 leading-relaxed">Pick your topics, get a beautifully crafted email every morning with Big Picture analysis, weekly trends, and today&rsquo;s updates &mdash; all researched by AI.</p>
-      <button id="create-btn" class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold text-lg h-12 px-8 hover:opacity-85 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">Create My Digest</button>
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+        ${existingDigestId ? `<a href="/d/${existingDigestId}" class="inline-flex items-center justify-center rounded-lg bg-primary text-primary-foreground font-semibold text-lg h-12 px-8 hover:opacity-85 transition-opacity no-underline">Go to My Digest</a>` : ""}
+        <button id="create-btn" class="inline-flex items-center justify-center rounded-lg ${existingDigestId ? "border border-border bg-transparent text-foreground" : "bg-primary text-primary-foreground"} font-semibold text-lg h-12 px-8 hover:opacity-85 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">${existingDigestId ? "Create New Digest" : "Create My Digest"}</button>
+      </div>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-5">
       <div class="bg-card rounded-xl p-6 text-center">

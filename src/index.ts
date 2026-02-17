@@ -5,6 +5,16 @@ import { dashboardPage } from "./html/dashboard";
 
 export { DigestObject } from "./digest-object";
 
+function digestCookie(id: string): string {
+  return `digest_id=${id}; Path=/; Max-Age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+}
+
+function getDigestIdFromCookie(request: Request): string | null {
+  const cookie = request.headers.get("cookie") ?? "";
+  const match = cookie.match(/(?:^|;\s*)digest_id=([a-f0-9-]{36})/);
+  return match ? match[1] : null;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -13,7 +23,8 @@ export default {
 
     // Landing page
     if (path === "/" && method === "GET") {
-      return new Response(landingPage(), {
+      const existingId = getDigestIdFromCookie(request);
+      return new Response(landingPage(existingId), {
         headers: { "content-type": "text/html;charset=utf-8" },
       });
     }
@@ -21,14 +32,19 @@ export default {
     // Create new digest — just generate a UUID, DO is created lazily on connect
     if (path === "/api/create" && method === "POST") {
       const id = crypto.randomUUID();
-      return Response.json({ id });
+      return Response.json({ id }, {
+        headers: { "set-cookie": digestCookie(id) },
+      });
     }
 
     // Dashboard page
     const dashMatch = path.match(/^\/d\/([a-f0-9-]{36})$/);
     if (dashMatch && method === "GET") {
       return new Response(dashboardPage(dashMatch[1]), {
-        headers: { "content-type": "text/html;charset=utf-8" },
+        headers: {
+          "content-type": "text/html;charset=utf-8",
+          "set-cookie": digestCookie(dashMatch[1]),
+        },
       });
     }
 
