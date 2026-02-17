@@ -38,6 +38,8 @@ export function App({ digestId }: { digestId: string }) {
     msg: string;
     ok: boolean;
   } | null>(null);
+  const [savedEmail, setSavedEmail] = useState("");
+  const [editing, setEditing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [synced, setSynced] = useState(false);
   const [openDigests, setOpenDigests] = useState<Set<number>>(new Set());
@@ -66,7 +68,8 @@ export function App({ digestId }: { digestId: string }) {
     function syncConfig() {
       const e = (config.get("email") as string) || "";
       const en = (config.get("enabled") as boolean) || false;
-      // Only update email if user isn't actively editing
+      setSavedEmail(e);
+      // Only update email input if user isn't actively editing
       if (document.activeElement !== emailInputRef.current && e) {
         setEmail(e);
       }
@@ -119,6 +122,8 @@ export function App({ digestId }: { digestId: string }) {
         configRef.current!.set("enabled", true);
       }
     });
+    setSavedEmail(trimmed);
+    setEditing(false);
     setEmailStatus({ msg: "Saved!", ok: true });
     setTimeout(() => setEmailStatus(null), 3000);
   }, [email]);
@@ -193,19 +198,45 @@ export function App({ digestId }: { digestId: string }) {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex gap-2.5">
-                <Input
-                  ref={emailInputRef}
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && saveEmail()}
-                />
-                <Button size="sm" onClick={saveEmail}>
-                  Save
-                </Button>
-              </div>
+              {savedEmail && !editing ? (
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-foreground">{savedEmail}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditing(true)}
+                  >
+                    Change
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-2.5">
+                  <Input
+                    ref={emailInputRef}
+                    type="email"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveEmail()}
+                    autoFocus={editing}
+                  />
+                  <Button size="sm" onClick={saveEmail}>
+                    Save
+                  </Button>
+                  {editing && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditing(false);
+                        setEmail(savedEmail);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </div>
+              )}
               {emailStatus && (
                 <p
                   className={`text-sm mt-2 ${emailStatus.ok ? "text-success" : "text-destructive"}`}
