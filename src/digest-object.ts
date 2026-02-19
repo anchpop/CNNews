@@ -26,8 +26,17 @@ export class DigestObject extends YServer<Env> {
     this.lastKnownEmail = this.getEmail();
 
     // Load server-authoritative confirmation state from KV
-    this.serverConfirmed = (await this.ctx.storage.get<boolean>("confirmed")) ?? false;
-    this.serverConfirmedAt = (await this.ctx.storage.get<number>("confirmedAt")) ?? 0;
+    const kvConfirmed = await this.ctx.storage.get<boolean>("confirmed");
+    if (kvConfirmed === undefined) {
+      // Migration: seed KV from Yjs doc for users confirmed before KV was introduced
+      const yjsConfirmed = (this.document.getMap("config").get("confirmed") as boolean) ?? false;
+      if (yjsConfirmed) {
+        await this.setConfirmed(true);
+      }
+    } else {
+      this.serverConfirmed = kvConfirmed;
+      this.serverConfirmedAt = (await this.ctx.storage.get<number>("confirmedAt")) ?? 0;
+    }
     // Sync to Yjs for client display
     this.syncConfirmedToYjs();
 
