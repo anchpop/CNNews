@@ -12,6 +12,7 @@ export class DigestObject extends YServer<Env> {
   private lastKnownEmail: string | null = null;
   private lastVerificationSentAt: number = 0;
   private lastDigestGeneratedAt: number = 0;
+  private roomName: string | null = null;
 
   // Server-authoritative confirmation state (stored in DO KV, NOT client-writable)
   private serverConfirmed: boolean = false;
@@ -22,6 +23,10 @@ export class DigestObject extends YServer<Env> {
       | Uint8Array
       | undefined;
     if (stored) Y.applyUpdate(this.document, new Uint8Array(stored));
+
+    // Ensure this.name is available even when woken by alarm (not fetch).
+    // Persist on fetch-triggered loads; restore from KV or digest HTML on alarm loads.
+    await this.ensureRoomName();
 
     this.lastKnownEmail = this.getEmail();
 
@@ -220,7 +225,13 @@ export class DigestObject extends YServer<Env> {
   async onAlarm(): Promise<void> {
     const shouldReschedule = this.isEnabled() && this.getFrequency() !== "manual";
     if (!this.isConfirmed()) {
-      // Not yet confirmed — skip digest but keep alarm so we retry tomorrow
+      if (shouldReschedule) {
+        await this.scheduleNextAlarm();
+      }
+      return;
+    }
+    if (!this.roomName) {
+      console.error("Alarm fired but room name unknown — skipping digest");
       if (shouldReschedule) {
         await this.scheduleNextAlarm();
       }
@@ -238,9 +249,40 @@ export class DigestObject extends YServer<Env> {
 
   // --- Digest generation ---
 
+  /** Resolve the room name (UUID). this.name throws when woken by alarm. */
+  private async ensureRoomName(): Promise<void> {
+    // Try partyserver's name (available on fetch-triggered loads)
+    try {
+      const name = this.name;
+      if (name) {
+        if (this.roomName !== name) {
+          this.roomName = name;
+          await this.ctx.storage.put("roomName", name);
+        }
+        return;
+      }
+    } catch {
+      // this.name throws when DO is woken by alarm, not fetch
+    }
+
+    // Fall back to KV
+    this.roomName = (await this.ctx.storage.get<string>("roomName")) ?? null;
+    if (this.roomName) return;
+
+    // Migration: extract UUID from existing digest HTML
+    const digests = this.getDigests();
+    for (const d of digests) {
+      const match = d.html?.match(/\/d\/([a-f0-9-]{36})/);
+      if (match) {
+        this.roomName = match[1];
+        await this.ctx.storage.put("roomName", this.roomName);
+        return;
+      }
+    }
+  }
+
   private getDashboardUrl(): string {
-    // this.name is the room name (the UUID)
-    return `https://news.chadnauseam.com/d/${this.name}`;
+    return `https://news.chadnauseam.com/d/${this.roomName ?? "unknown"}`;
   }
 
   private async getOrCreateConfirmToken(): Promise<string> {
