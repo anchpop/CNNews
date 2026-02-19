@@ -6,10 +6,16 @@ import { sendDigestEmail, sendConfirmationEmail } from "./resend";
 
 const MAX_DIGESTS = 30;
 const DIGEST_CONTEXT_COUNT = 3;
-const ALARM_HOUR_UTC = 8;
+const SEND_HOUR = 8; // 8am in user's local timezone
 
 export class DigestObject extends YServer<Env> {
   private lastKnownEmail: string | null = null;
+  private lastVerificationSentAt: number = 0;
+  private lastDigestGeneratedAt: number = 0;
+
+  // Server-authoritative confirmation state (stored in DO KV, NOT client-writable)
+  private serverConfirmed: boolean = false;
+  private serverConfirmedAt: number = 0;
 
   async onLoad() {
     const stored = (await this.ctx.storage.get("doc")) as
@@ -19,8 +25,26 @@ export class DigestObject extends YServer<Env> {
 
     this.lastKnownEmail = this.getEmail();
 
+    // Load server-authoritative confirmation state from KV
+    this.serverConfirmed = (await this.ctx.storage.get<boolean>("confirmed")) ?? false;
+    this.serverConfirmedAt = (await this.ctx.storage.get<number>("confirmedAt")) ?? 0;
+    // Sync to Yjs for client display
+    this.syncConfirmedToYjs();
+
+    // Backfill nextAlarmTime for existing alarms
+    const existingAlarm = await this.ctx.storage.getAlarm();
+    if (existingAlarm) {
+      const config = this.document.getMap("config");
+      if (!config.get("nextAlarmTime")) {
+        this.document.transact(() => {
+          config.set("nextAlarmTime", existingAlarm);
+        });
+      }
+    }
+
     // Watch config changes for alarm scheduling + email change detection
     this.document.getMap("config").observe(() => {
+      this.enforceServerFields();
       this.syncAlarmState().catch((e) =>
         console.error("Alarm sync error:", e)
       );
@@ -30,17 +54,53 @@ export class DigestObject extends YServer<Env> {
     });
   }
 
+  /** Revert any client-side mutations to server-controlled fields */
+  private enforceServerFields(): void {
+    const config = this.document.getMap("config");
+    const yjsConfirmed = (config.get("confirmed") as boolean) ?? false;
+    const yjsConfirmedAt = (config.get("confirmedAt") as number) ?? 0;
+    if (yjsConfirmed !== this.serverConfirmed || yjsConfirmedAt !== this.serverConfirmedAt) {
+      this.syncConfirmedToYjs();
+    }
+  }
+
+  /** Write server-authoritative confirmed state to Yjs (for client display) */
+  private syncConfirmedToYjs(): void {
+    this.document.transact(() => {
+      const config = this.document.getMap("config");
+      config.set("confirmed", this.serverConfirmed);
+      config.set("confirmedAt", this.serverConfirmedAt);
+    });
+  }
+
+  /** Set confirmation state (updates KV + instance vars + Yjs) */
+  private async setConfirmed(confirmed: boolean): Promise<void> {
+    this.serverConfirmed = confirmed;
+    if (confirmed) {
+      this.serverConfirmedAt = Date.now();
+    } else {
+      this.serverConfirmedAt = 0;
+    }
+    await this.ctx.storage.put("confirmed", this.serverConfirmed);
+    await this.ctx.storage.put("confirmedAt", this.serverConfirmedAt);
+    this.syncConfirmedToYjs();
+  }
+
   private async checkEmailChanged(): Promise<void> {
     const currentEmail = this.getEmail();
     if (currentEmail !== this.lastKnownEmail) {
       this.lastKnownEmail = currentEmail;
       // Email changed — reset confirmation and invalidate token
       if (this.isConfirmed()) {
-        this.document.transact(() => {
-          this.document.getMap("config").set("confirmed", false);
-        });
+        await this.setConfirmed(false);
       }
       await this.ctx.storage.delete("confirmToken");
+      // Auto-send verification for new/changed email
+      if (currentEmail && !this.isConfirmed()) {
+        this.sendVerification().catch((e) =>
+          console.error("Auto-verification error:", e)
+        );
+      }
     }
   }
 
@@ -70,8 +130,12 @@ export class DigestObject extends YServer<Env> {
     return (this.document.getMap("config").get("frequency") as string) ?? "daily";
   }
 
+  private getTimezone(): string {
+    return (this.document.getMap("config").get("timezone") as string) ?? "UTC";
+  }
+
   private isConfirmed(): boolean {
-    return (this.document.getMap("config").get("confirmed") as boolean) ?? false;
+    return this.serverConfirmed;
   }
 
   private frequencyDays(): number {
@@ -86,39 +150,71 @@ export class DigestObject extends YServer<Env> {
   // --- Alarm management ---
 
   private lastScheduledFrequency: string | null = null;
+  private lastScheduledTimezone: string | null = null;
 
   private async syncAlarmState(): Promise<void> {
     const enabled = this.isEnabled();
     const freq = this.getFrequency();
+    const tz = this.getTimezone();
     const alarm = await this.ctx.storage.getAlarm();
+    const shouldHaveAlarm = enabled && freq !== "manual";
 
-    if (!enabled && alarm) {
+    if (!shouldHaveAlarm && alarm) {
       await this.ctx.storage.deleteAlarm();
       this.lastScheduledFrequency = null;
-    } else if (enabled && !alarm) {
+      this.lastScheduledTimezone = null;
+      this.document.transact(() => {
+        this.document.getMap("config").delete("nextAlarmTime");
+      });
+    } else if (shouldHaveAlarm && !alarm) {
       await this.scheduleNextAlarm();
       this.lastScheduledFrequency = freq;
-    } else if (enabled && alarm && this.lastScheduledFrequency !== freq) {
-      // Frequency changed — reschedule
+      this.lastScheduledTimezone = tz;
+    } else if (shouldHaveAlarm && alarm && (this.lastScheduledFrequency !== freq || this.lastScheduledTimezone !== tz)) {
+      // Frequency or timezone changed — reschedule
       await this.scheduleNextAlarm();
       this.lastScheduledFrequency = freq;
+      this.lastScheduledTimezone = tz;
     }
   }
 
   private async scheduleNextAlarm(): Promise<void> {
     const days = this.frequencyDays();
+    const tz = this.getTimezone();
     const now = new Date();
+
+    // Compute the UTC offset for the user's timezone by comparing
+    // formatted times. Workers run in UTC so Date() parses locale strings as UTC.
+    const utcStr = now.toLocaleString("en-US", { timeZone: "UTC" });
+    let tzStr: string;
+    try {
+      tzStr = now.toLocaleString("en-US", { timeZone: tz });
+    } catch {
+      // Invalid timezone — fall back to UTC
+      tzStr = utcStr;
+    }
+    const offsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime();
+
+    // Start with today at SEND_HOUR:00 UTC, then shift by the offset
+    // to get the UTC moment when it's SEND_HOUR:00 in the user's timezone
     const next = new Date(now);
-    next.setUTCHours(ALARM_HOUR_UTC, 0, 0, 0);
-    if (next <= now) next.setUTCDate(next.getUTCDate() + days);
-    else if (days > 1) next.setUTCDate(next.getUTCDate() + days - 1);
+    next.setUTCHours(SEND_HOUR, 0, 0, 0);
+    next.setTime(next.getTime() - offsetMs);
+
+    if (next <= now) next.setTime(next.getTime() + days * 24 * 60 * 60 * 1000);
+    else if (days > 1) next.setTime(next.getTime() + (days - 1) * 24 * 60 * 60 * 1000);
+
     await this.ctx.storage.setAlarm(next.getTime());
+    this.document.transact(() => {
+      this.document.getMap("config").set("nextAlarmTime", next.getTime());
+    });
   }
 
   async onAlarm(): Promise<void> {
+    const shouldReschedule = this.isEnabled() && this.getFrequency() !== "manual";
     if (!this.isConfirmed()) {
       // Not yet confirmed — skip digest but keep alarm so we retry tomorrow
-      if (this.isEnabled()) {
+      if (shouldReschedule) {
         await this.scheduleNextAlarm();
       }
       return;
@@ -128,7 +224,7 @@ export class DigestObject extends YServer<Env> {
     } catch (e) {
       console.error("Alarm digest failed:", e);
     }
-    if (this.isEnabled()) {
+    if (shouldReschedule) {
       await this.scheduleNextAlarm();
     }
   }
@@ -137,7 +233,7 @@ export class DigestObject extends YServer<Env> {
 
   private getDashboardUrl(): string {
     // this.name is the room name (the UUID)
-    return `https://tellytax.nauseam.workers.dev/d/${this.name}`;
+    return `https://news.chadnauseam.com/d/${this.name}`;
   }
 
   private async getOrCreateConfirmToken(): Promise<string> {
@@ -146,6 +242,27 @@ export class DigestObject extends YServer<Env> {
     const token = crypto.randomUUID();
     await this.ctx.storage.put("confirmToken", token);
     return token;
+  }
+
+  private async sendVerification(): Promise<void> {
+    const email = this.getEmail();
+    if (!email) throw new Error("No email configured");
+    const now = Date.now();
+    if (now - this.lastVerificationSentAt < 60_000) {
+      throw new Error("Please wait 60 seconds before resending");
+    }
+    const token = await this.getOrCreateConfirmToken();
+    const confirmUrl = `https://news.chadnauseam.com/confirm/${this.name}/${token}`;
+    const topics = this.getTopics();
+    const result = await sendConfirmationEmail(
+      this.env.RESEND_API_KEY,
+      email,
+      confirmUrl,
+      this.getDashboardUrl(),
+      topics
+    );
+    if (!result.success) console.error("Verification email failed:", result.error);
+    this.lastVerificationSentAt = now;
   }
 
   private async runDigest(): Promise<Digest> {
@@ -170,27 +287,12 @@ export class DigestObject extends YServer<Env> {
     });
 
     if (email) {
-      const confirmed = this.isConfirmed();
-      let result: { success: boolean; error?: string };
-      if (!confirmed) {
-        // Token is stored only in DO storage — never exposed to the Yjs client
-        const token = await this.getOrCreateConfirmToken();
-        const confirmUrl = `https://tellytax.nauseam.workers.dev/confirm/${this.name}/${token}`;
-        result = await sendConfirmationEmail(
-          this.env.RESEND_API_KEY,
-          email,
-          confirmUrl,
-          digest.subject,
-          digest.html
-        );
-      } else {
-        result = await sendDigestEmail(
-          this.env.RESEND_API_KEY,
-          email,
-          digest.subject,
-          digest.html
-        );
-      }
+      const result = await sendDigestEmail(
+        this.env.RESEND_API_KEY,
+        email,
+        digest.subject,
+        digest.html
+      );
       if (!result.success) console.error("Email send failed:", result.error);
     }
 
@@ -203,10 +305,24 @@ export class DigestObject extends YServer<Env> {
     connection: import("partyserver").Connection,
     message: string
   ): Promise<void> {
-    const data = JSON.parse(message);
+    let data: any;
+    try {
+      data = JSON.parse(message);
+    } catch {
+      return;
+    }
     if (data.type === "trigger") {
       try {
-        await this.runDigest();
+        if (!this.isConfirmed()) {
+          await this.sendVerification();
+        } else {
+          const now = Date.now();
+          if (now - this.lastDigestGeneratedAt < 60_000) {
+            throw new Error("Please wait 60 seconds between digest generations");
+          }
+          this.lastDigestGeneratedAt = now;
+          await this.runDigest();
+        }
         this.sendCustomMessage(
           connection,
           JSON.stringify({ type: "trigger-result", ok: true })
@@ -235,11 +351,32 @@ export class DigestObject extends YServer<Env> {
         return new Response("Invalid or expired confirmation link.", { status: 403 });
       }
       if (!this.isConfirmed()) {
-        this.document.transact(() => {
-          this.document.getMap("config").set("confirmed", true);
-        });
+        await this.setConfirmed(true);
       }
       return Response.redirect(this.getDashboardUrl(), 302);
+    }
+    // Path: /parties/digest-object/:uuid/unsubscribe
+    if (url.pathname.endsWith("/unsubscribe")) {
+      if (request.method === "POST") {
+        this.document.transact(() => {
+          this.document.getMap("config").set("frequency", "manual");
+        });
+        return Response.redirect(this.getDashboardUrl(), 302);
+      }
+      // GET shows a confirmation page
+      return new Response(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unsubscribe - CN News</title></head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div style="max-width:400px;margin:80px auto;padding:20px;">
+<div style="background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,0.06);text-align:center;">
+<h1 style="color:#1a1a2e;font-size:20px;margin:0 0 12px;">Unsubscribe from CN News?</h1>
+<p style="color:#555;font-size:14px;margin:0 0 24px;">You'll stop receiving scheduled digests. You can re-enable them anytime from your dashboard.</p>
+<form method="POST"><button type="submit" style="background:#e67e22;color:#fff;border:none;font-weight:700;font-size:15px;padding:12px 32px;border-radius:8px;cursor:pointer;">Confirm unsubscribe</button></form>
+<p style="margin:16px 0 0;"><a href="${this.getDashboardUrl()}" style="color:#e67e22;font-size:13px;text-decoration:none;">Back to dashboard</a></p>
+</div></div></body></html>`, {
+        headers: { "content-type": "text/html;charset=utf-8" },
+      });
     }
     return new Response("Not found", { status: 404 });
   }

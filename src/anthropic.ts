@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { marked } from "marked";
-import type { Digest, DigestSection } from "./types";
+import type { Digest, DigestSection, DigestSource } from "./types";
 
 export async function generateDigest(
   apiKey: string,
@@ -8,6 +8,7 @@ export async function generateDigest(
   previousDigests: Digest[],
   dashboardUrl: string
 ): Promise<Digest> {
+  const model = "claude-opus-4-6";
   const client = new Anthropic({ apiKey });
   const today = new Date().toISOString().split("T")[0];
 
@@ -23,37 +24,37 @@ export async function generateDigest(
 
   const systemPrompt = `You are a concise news digest curator. Today is ${today}. Topics: ${topics.join(", ")}.
 
-Search the web for each topic. Write a digest with exactly 3 sections in this order:
+Search the web for each topic, then write a digest in this exact format:
 
-1. **Today's Updates** - What happened today/last 24 hours (bullet points)
-2. **This Week** - Notable developments from the past 7 days (bullet points)
-3. **Big Picture** - Major trends across the topics (1-2 short paragraphs)
+subject: Brief catchy subject line
+
+## Today's Updates
+What happened today/last 24 hours (bullet points)
+
+## This Week
+Notable developments from the past 7 days (bullet points)
+
+## Big Picture
+Major trends across the topics (1-2 short paragraphs)
 
 Rules:
+- The first line MUST be "subject: ..." followed by a blank line, then the sections.
 - Be concise. Short, punchy bullet points. No filler.
 - If there's no significant news for a topic or section, just say "Nothing notable today" or similar. Don't stretch or fabricate.
-- Mention sources when relevant.
-- Not every section needs to be long.${previousContext}
-
-Respond with ONLY a JSON object (no markdown fences):
-{
-  "subject": "Brief catchy subject line",
-  "sections": [
-    {"title": "Today's Updates", "content": "..."},
-    {"title": "This Week", "content": "..."},
-    {"title": "Big Picture", "content": "..."}
-  ]
-}`;
+- Not every section needs to be long.
+- Use **bold** for emphasis, never _italics_ or *single asterisks*.
+- Do not use underscores in markdown.${previousContext}`;
 
   let fullText = "";
   let stopReason: string | null = null;
+  const citationMap = new Map<string, string>(); // url -> title
   let messages: Anthropic.MessageParam[] = [
     { role: "user", content: "Research and generate today's digest." },
   ];
 
   while (true) {
     const response = await client.beta.messages.create({
-      model: "claude-opus-4-6",
+      model,
       max_tokens: 16000,
       system: systemPrompt,
       betas: ["web-fetch-2025-09-10"],
@@ -77,6 +78,20 @@ Respond with ONLY a JSON object (no markdown fences):
     for (const block of response.content) {
       if (block.type === "text") {
         fullText += block.text;
+        // Insert inline link for the first new citation on this text block
+        const anyBlock = block as any;
+        if (Array.isArray(anyBlock.citations)) {
+          for (const cite of anyBlock.citations) {
+            if (cite.type === "web_search_result_location" && cite.url) {
+              if (!citationMap.has(cite.url)) {
+                // First time seeing this source — insert inline link
+                const domain = new URL(cite.url).hostname.replace(/^www\./, "");
+                fullText += ` ([${domain}](${cite.url}))`;
+              }
+              citationMap.set(cite.url, cite.title || cite.url);
+            }
+          }
+        }
       }
     }
 
@@ -87,25 +102,42 @@ Respond with ONLY a JSON object (no markdown fences):
         { role: "user", content: "Please continue." },
       ];
       fullText = "";
+      citationMap.clear();
     } else {
       break;
     }
   }
 
-  const jsonMatch = fullText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON found in response");
-  const parsed = JSON.parse(jsonMatch[0]);
-  const sections: DigestSection[] = parsed.sections;
-  const subject: string = parsed.subject;
+  // Parse "subject: ..." from first line
+  const subjectMatch = fullText.match(/^subject:\s*(.+)/im);
+  const subject = subjectMatch ? subjectMatch[1].trim() : "Daily Digest";
 
-  const html = renderDigestHtml(subject, sections, today, dashboardUrl);
+  // Parse sections by ## headings
+  const sectionRegex = /^##\s+(.+)/gm;
+  const sections: DigestSection[] = [];
+  let match: RegExpExecArray | null;
+  const headings: { title: string; index: number }[] = [];
+  while ((match = sectionRegex.exec(fullText)) !== null) {
+    headings.push({ title: match[1].trim(), index: match.index + match[0].length });
+  }
+  for (let i = 0; i < headings.length; i++) {
+    const start = headings[i].index;
+    const end = i + 1 < headings.length ? fullText.lastIndexOf("##", headings[i + 1].index) : fullText.length;
+    const content = fullText.slice(start, end).trim().replace(/^---+\s*/gm, "").replace(/\s*---+$/gm, "").trim();
+    sections.push({ title: headings[i].title, content });
+  }
 
-  return { date: today, subject, sections, html };
+  const sources: DigestSource[] = Array.from(citationMap, ([url, title]) => ({ url, title }));
+
+  const html = renderDigestHtml(subject, sections, sources, today, dashboardUrl);
+
+  return { date: today, subject, sections, sources, html };
 }
 
 function renderDigestHtml(
   subject: string,
   sections: DigestSection[],
+  sources: DigestSource[],
   date: string,
   dashboardUrl: string
 ): string {
@@ -119,6 +151,14 @@ function renderDigestHtml(
     )
     .join("");
 
+  const sourcesHtml = sources.length > 0 ? `
+    <div style="margin-bottom:28px;">
+      <h2 style="color:#e67e22;font-size:20px;margin:0 0 12px 0;border-bottom:2px solid #f0f0f0;padding-bottom:8px;">Sources</h2>
+      <ul style="color:#555;font-size:13px;line-height:1.8;padding-left:20px;margin:0;">
+        ${sources.map((s) => `<li><a href="${escapeHtml(s.url)}" style="color:#e67e22;text-decoration:none;">${escapeHtml(s.title)}</a></li>`).join("\n        ")}
+      </ul>
+    </div>` : "";
+
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -127,16 +167,17 @@ function renderDigestHtml(
     <div style="background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
       <div style="text-align:center;margin-bottom:24px;">
         <h1 style="color:#1a1a2e;font-size:24px;margin:0 0 4px 0;">${escapeHtml(subject)}</h1>
-        <p style="color:#888;font-size:13px;margin:0;">${date} &middot; Nauseam News Daily Digest</p>
+        <p style="color:#888;font-size:13px;margin:0;">${date} &middot; CN News Daily Digest</p>
       </div>
       ${sectionHtml}
+      ${sourcesHtml}
       <div style="text-align:center;padding-top:20px;border-top:1px solid #f0f0f0;">
         <p style="color:#aaa;font-size:12px;margin:0;">
           <a href="${dashboardUrl}" style="color:#e67e22;text-decoration:none;">Manage digest settings</a>
           &nbsp;&middot;&nbsp;
-          <a href="${dashboardUrl}" style="color:#999;text-decoration:none;">Unsubscribe</a>
+          <a href="${dashboardUrl.replace("/d/", "/unsubscribe/")}" style="color:#999;text-decoration:none;">Unsubscribe</a>
         </p>
-        <p style="color:#ccc;font-size:11px;margin:6px 0 0;">Generated by Nauseam News</p>
+        <p style="color:#ccc;font-size:11px;margin:6px 0 0;">Generated by CN News</p>
       </div>
     </div>
   </div>

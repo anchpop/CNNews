@@ -14,3 +14,10 @@ class_name = "DigestObject"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DigestObject"]
+
+[[routes]]
+pattern = "news.chadnauseam.com"
+custom_domain = true
+
+[observability]
+enabled = true

@@ -3,10 +3,16 @@ export interface DigestSection {
   content: string;
 }
 
+export interface DigestSource {
+  url: string;
+  title: string;
+}
+
 export interface Digest {
   date: string;
   subject: string;
   sections: DigestSection[];
+  sources: DigestSource[];
   html: string;
 }
 

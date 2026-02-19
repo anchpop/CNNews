@@ -2,12 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import YProvider from "y-partyserver/provider";
 import * as Y from "yjs";
 import { marked } from "marked";
-import { Mail, Plus, X, Zap, ChevronDown, ChevronRight, MailCheck } from "lucide-react";
+import DOMPurify from "dompurify";
+import { Pencil, Check, Plus, X, ChevronDown, ChevronRight, MailCheck, Clock } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "./components/ui/card";
 import { Input } from "./components/ui/input";
-import { Badge } from "./components/ui/badge";
-import { Switch } from "./components/ui/switch";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -19,19 +18,26 @@ interface DigestSection {
   content: string;
 }
 
+interface DigestSource {
+  url: string;
+  title: string;
+}
+
 interface DigestEntry {
   date: string;
   subject: string;
   sections: DigestSection[];
+  sources?: DigestSource[];
 }
 
-type Frequency = "daily" | "every_other_day" | "weekly" | "biweekly";
+type Frequency = "daily" | "every_other_day" | "weekly" | "biweekly" | "manual";
 
 const FREQUENCY_OPTIONS: { value: Frequency; label: string }[] = [
-  { value: "daily", label: "Daily" },
-  { value: "every_other_day", label: "Every other day" },
-  { value: "weekly", label: "Weekly" },
-  { value: "biweekly", label: "Biweekly" },
+  { value: "daily", label: "every day" },
+  { value: "every_other_day", label: "every other day" },
+  { value: "weekly", label: "every week" },
+  { value: "biweekly", label: "every two weeks" },
+  { value: "manual", label: "when I press the button" },
 ];
 
 export function App({ digestId }: { digestId: string }) {
@@ -53,7 +59,10 @@ export function App({ digestId }: { digestId: string }) {
   const [editing, setEditing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const [verificationSent, setVerificationSent] = useState(false);
+  const [nextAlarmTime, setNextAlarmTime] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [justConfirmed, setJustConfirmed] = useState(false);
   const [synced, setSynced] = useState(false);
   const [openDigests, setOpenDigests] = useState<Set<number>>(new Set());
 
@@ -62,6 +71,7 @@ export function App({ digestId }: { digestId: string }) {
   const configRef = useRef<Y.Map<unknown> | null>(null);
   const topicsArrRef = useRef<Y.Array<string> | null>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
+  const prevConfirmedRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     const doc = new Y.Doc();
@@ -83,13 +93,23 @@ export function App({ digestId }: { digestId: string }) {
       const en = (config.get("enabled") as boolean) || false;
       const freq = (config.get("frequency") as Frequency) || "daily";
       const conf = (config.get("confirmed") as boolean) || false;
+      const alarmTime = (config.get("nextAlarmTime") as number) || null;
       setSavedEmail(e);
+      setNextAlarmTime(alarmTime);
       // Only update email input if user isn't actively editing
       if (document.activeElement !== emailInputRef.current && e) {
         setEmail(e);
       }
       setEnabled(en);
       setFrequency(freq);
+      const confirmedAt = (config.get("confirmedAt") as number) || 0;
+      // Show banner on live transition OR if confirmed within last 2 minutes
+      if (prevConfirmedRef.current !== null && conf && !prevConfirmedRef.current) {
+        setJustConfirmed(true);
+      } else if (conf && confirmedAt > 0 && Date.now() - confirmedAt < 120_000) {
+        setJustConfirmed(true);
+      }
+      prevConfirmedRef.current = conf;
       setConfirmed(conf);
     }
 
@@ -106,6 +126,28 @@ export function App({ digestId }: { digestId: string }) {
       syncConfig();
       syncTopics();
       syncDigests();
+      // Prefill email and topics from URL query params (landing page flow)
+      const params = new URLSearchParams(window.location.search);
+      const prefillEmail = params.get("email");
+      const prefillTopics = params.getAll("topic").filter(Boolean);
+      if (prefillEmail && !config.get("email")) {
+        doc.transact(() => {
+          config.set("email", prefillEmail);
+          config.set("enabled", true);
+        });
+      }
+      if (prefillTopics.length > 0 && topicsArr.length === 0) {
+        topicsArr.push(prefillTopics);
+      }
+      if (prefillEmail || prefillTopics.length > 0) {
+        // Clean up URL
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      // Always keep timezone up to date
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz && config.get("timezone") !== tz) {
+        config.set("timezone", tz);
+      }
     });
 
     config.observe(syncConfig);
@@ -117,9 +159,9 @@ export function App({ digestId }: { digestId: string }) {
       if (data.type === "trigger-result") {
         setGenerating(false);
         if (data.ok) {
-          setTriggerStatus({ msg: "Digest generated and sent!", ok: true });
+          const conf = (config.get("confirmed") as boolean) || false;
+          setTriggerStatus({ msg: conf ? "Digest generated and sent!" : "Verification email sent!", ok: true });
         } else {
-          setVerificationSent(false);
           setTriggerStatus({ msg: data.error || "Failed", ok: false });
         }
       }
@@ -131,9 +173,46 @@ export function App({ digestId }: { digestId: string }) {
     };
   }, [digestId]);
 
+  useEffect(() => {
+    if (!nextAlarmTime) {
+      setCountdown("");
+      return;
+    }
+    function update() {
+      const diff = nextAlarmTime! - Date.now();
+      if (diff <= 0) {
+        setCountdown("any moment now");
+        return;
+      }
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      if (hours >= 1) {
+        setCountdown(`${hours}h`);
+      } else {
+        setCountdown(`${minutes}m`);
+      }
+    }
+    update();
+    const id = setInterval(update, 60_000);
+    return () => clearInterval(id);
+  }, [nextAlarmTime]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const id = setInterval(() => {
+      setResendCooldown((c) => (c <= 1 ? 0 : c - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [resendCooldown > 0]);
+
+  const startCooldown = useCallback(() => {
+    setResendCooldown(60);
+  }, []);
+
   const saveEmail = useCallback(() => {
     const trimmed = email.trim();
     if (!trimmed || !configRef.current || !docRef.current) return;
+    if (emailInputRef.current && !emailInputRef.current.reportValidity()) return;
     docRef.current.transact(() => {
       configRef.current!.set("email", trimmed);
       if (!configRef.current!.get("enabled")) {
@@ -142,7 +221,7 @@ export function App({ digestId }: { digestId: string }) {
     });
     setSavedEmail(trimmed);
     setEditing(false);
-    setVerificationSent(false);
+    startCooldown();
     setTriggerStatus(null);
     setEmailStatus({ msg: "Saved!", ok: true });
     setTimeout(() => setEmailStatus(null), 3000);
@@ -176,11 +255,8 @@ export function App({ digestId }: { digestId: string }) {
     if (!providerRef.current) return;
     setGenerating(true);
     if (isVerification) {
-      setVerificationSent(true);
-      setTriggerStatus({
-        msg: "Sending your verification email — check your inbox in a moment!",
-        ok: true,
-      });
+      startCooldown();
+      setTriggerStatus(null);
     } else {
       setTriggerStatus({
         msg: "This may take a minute while Claude researches your topics...",
@@ -206,7 +282,7 @@ export function App({ digestId }: { digestId: string }) {
       {/* Header */}
       <header className="flex items-center justify-between mb-8 pb-4 border-b border-border">
         <a href="/" className="text-primary text-2xl font-bold no-underline">
-          Nauseam News
+          Chad Nauseam News
         </a>
         <span className="text-muted-foreground text-sm font-mono">
           ID: {digestId.slice(0, 8)}&hellip;
@@ -225,43 +301,53 @@ export function App({ digestId }: { digestId: string }) {
           {savedEmail && !confirmed && (
             <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-500 p-5 flex gap-4 items-start">
               <MailCheck className="h-6 w-6 text-amber-500 shrink-0 mt-0.5" />
-              <div>
+              <div className="flex-1">
                 <p className="font-semibold text-amber-900 dark:text-amber-200 text-sm">
                   Please verify your email address
                 </p>
                 <p className="text-amber-800 dark:text-amber-300 text-sm mt-1">
-                  {verificationSent
-                    ? <>A verification email was sent to <strong>{savedEmail}</strong>. Click the link inside to confirm and start receiving digests.</>
-                    : <>Your digests won't be sent until you verify <strong>{savedEmail}</strong>. Use the button below to send a verification email.</>
-                  }
+                  A verification email was sent to <strong>{savedEmail}</strong>. Click the link inside to confirm and start receiving digests.
+                </p>
+                <Button
+                  onClick={() => triggerDigest(true)}
+                  disabled={generating || resendCooldown > 0}
+                  size="sm"
+                  variant="outline"
+                  className="mt-3 border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-500 dark:hover:bg-amber-950/30"
+                >
+                  {generating ? "Sending..." : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend verification email"}
+                </Button>
+              </div>
+            </div>
+          )}
+          {justConfirmed && (
+            <div className="rounded-xl border-2 border-green-400 bg-green-50 dark:bg-green-950/30 dark:border-green-500 p-5 flex gap-4 items-start">
+              <Check className="h-6 w-6 text-green-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-green-900 dark:text-green-200 text-sm">
+                  You're all set!
+                </p>
+                <p className="text-green-800 dark:text-green-300 text-sm mt-1">
+                  Your email has been confirmed. You'll start receiving digests on schedule.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Email Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Mail className="h-4 w-4" />
-                Email
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
+          {/* Controls bar — fluent sentence */}
+          <div className="flex flex-wrap items-baseline justify-between gap-y-2 text-base leading-relaxed">
+            <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-2 font-medium text-foreground">
+              <span>Sending</span>
               {savedEmail && !editing ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-foreground">{savedEmail}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setEditing(true)}
-                  >
-                    Change
-                  </Button>
-                </div>
+                <button
+                  onClick={() => setEditing(true)}
+                  className="text-foreground font-medium underline decoration-dotted underline-offset-2 cursor-pointer hover:text-primary transition-colors"
+                >
+                  {savedEmail}
+                </button>
               ) : (
-                <div className="flex gap-2.5">
-                  <Input
+                <span className="inline-flex items-center gap-1.5">
+                  <input
                     ref={emailInputRef}
                     type="email"
                     placeholder="you@example.com"
@@ -269,33 +355,46 @@ export function App({ digestId }: { digestId: string }) {
                     onChange={(e) => setEmail(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && saveEmail()}
                     autoFocus={editing}
+                    className="h-7 px-2 rounded border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring [field-sizing:content]"
                   />
-                  <Button size="sm" onClick={saveEmail}>
-                    Save
-                  </Button>
+                  <button onClick={saveEmail} className="text-primary hover:text-primary/80 cursor-pointer"><Check className="h-4 w-4" /></button>
                   {editing && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setEditing(false);
-                        setEmail(savedEmail);
-                      }}
-                    >
-                      Cancel
-                    </Button>
+                    <button onClick={() => { setEditing(false); setEmail(savedEmail); }} className="text-muted-foreground hover:text-foreground cursor-pointer"><X className="h-4 w-4" /></button>
                   )}
-                </div>
+                </span>
               )}
-              {emailStatus && (
-                <p
-                  className={`text-sm mt-2 ${emailStatus.ok ? "text-success" : "text-destructive"}`}
-                >
-                  {emailStatus.msg}
-                </p>
+              <span>a digest</span>
+              <select
+                value={frequency}
+                onChange={(e) => changeFrequency(e.target.value as Frequency)}
+                className="h-7 px-1.5 rounded border border-border bg-background text-foreground text-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring [field-sizing:content]"
+              >
+                {FREQUENCY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              {enabled && confirmed && countdown && (
+                <span className="text-muted-foreground font-normal text-sm">
+                  (next in {countdown})
+                </span>
               )}
-            </CardContent>
-          </Card>
+            </div>
+            <Button
+              onClick={() => triggerDigest(false)}
+              disabled={generating || !confirmed}
+              size="sm"
+              variant="outline"
+            >
+              {generating ? "Generating..." : "Send now"}
+            </Button>
+          </div>
+          {triggerStatus && (
+            <p
+              className={`text-sm ${triggerStatus.ok ? "text-success" : "text-destructive"}`}
+            >
+              {triggerStatus.msg}
+            </p>
+          )}
 
           {/* Topics Card */}
           <Card>
@@ -316,88 +415,20 @@ export function App({ digestId }: { digestId: string }) {
                 </Button>
               </div>
               {topics.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-3">
+                <div className="mt-3 divide-y divide-border">
                   {topics.map((topic, i) => (
-                    <Badge key={`${topic}-${i}`}>
-                      {topic}
+                    <div key={`${topic}-${i}`} className="flex items-center justify-between py-2">
+                      <span className="text-sm text-foreground">{topic}</span>
                       <button
                         onClick={() => removeTopic(i)}
-                        className="ml-1 text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+                        className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer p-1"
                       >
-                        <X className="h-3 w-3" />
+                        <X className="h-3.5 w-3.5" />
                       </button>
-                    </Badge>
+                    </div>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Controls Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="h-4 w-4" />
-                Controls
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-foreground">Email notifications</span>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <Switch
-                    checked={enabled}
-                    onCheckedChange={toggleEnabled}
-                  />
-                  <span className="text-sm text-muted-foreground">
-                    {enabled ? "On" : "Off"}
-                  </span>
-                </label>
-              </div>
-              {enabled && (
-                <div>
-                  <span className="text-sm text-muted-foreground mb-2 block">Frequency</span>
-                  <div className="flex gap-2 flex-wrap">
-                    {FREQUENCY_OPTIONS.map((opt) => (
-                      <Button
-                        key={opt.value}
-                        size="sm"
-                        variant={frequency === opt.value ? "default" : "outline"}
-                        onClick={() => changeFrequency(opt.value)}
-                      >
-                        {opt.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div>
-                {!confirmed && savedEmail ? (
-                  <Button
-                    onClick={() => triggerDigest(true)}
-                    disabled={generating || verificationSent}
-                    variant="outline"
-                    className="border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:border-amber-500 dark:hover:bg-amber-950/30"
-                  >
-                    <MailCheck className="h-4 w-4 mr-2" />
-                    {generating ? "Sending..." : verificationSent ? "Verification email sent" : "Send Verification Email"}
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() => triggerDigest(false)}
-                    disabled={generating}
-                  >
-                    {generating ? "Generating..." : "Generate Digest Now"}
-                  </Button>
-                )}
-                {triggerStatus && (
-                  <p
-                    className={`text-sm mt-2 ${triggerStatus.ok ? "text-success" : "text-destructive"}`}
-                  >
-                    {triggerStatus.msg}
-                  </p>
-                )}
-              </div>
             </CardContent>
           </Card>
 
@@ -443,11 +474,25 @@ export function App({ digestId }: { digestId: string }) {
                               </div>
                               <div
                                 dangerouslySetInnerHTML={{
-                                  __html: marked.parse(s.content.trim(), { async: false }) as string,
+                                  __html: DOMPurify.sanitize(marked.parse(s.content.trim(), { async: false }) as string),
                                 }}
                               />
                             </div>
                           ))}
+                          {d.sources && d.sources.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-border">
+                              <div className="text-primary font-semibold mb-1">Sources</div>
+                              <ul className="list-disc pl-5 space-y-0.5">
+                                {d.sources.map((src, si) => (
+                                  <li key={si}>
+                                    <a href={src.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                                      {src.title}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       </CollapsibleContent>
                     </Collapsible>
