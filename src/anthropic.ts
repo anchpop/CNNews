@@ -8,7 +8,7 @@ export async function generateDigest(
   previousDigests: Digest[],
   dashboardUrl: string
 ): Promise<Digest> {
-  const model = "claude-opus-4-6";
+  const model = "claude-sonnet-4-6";
   const client = new Anthropic({ apiKey });
   const today = new Date().toISOString().split("T")[0];
 
