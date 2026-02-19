@@ -119,7 +119,15 @@ export function App({ digestId }: { digestId: string }) {
     }
 
     function syncDigests() {
-      setDigests(digestsArr.toArray());
+      const newDigests = digestsArr.toArray();
+      setDigests((prev) => {
+        if (newDigests.length > prev.length) {
+          // A new digest arrived — clear generating state
+          setGenerating(false);
+          setTriggerStatus({ msg: "Digest generated and sent!", ok: true });
+        }
+        return newDigests;
+      });
     }
 
     provider.on("synced", () => {
@@ -158,13 +166,23 @@ export function App({ digestId }: { digestId: string }) {
     provider.on("custom-message", (msg: string) => {
       const data = JSON.parse(msg);
       if (data.type === "trigger-result") {
-        setGenerating(false);
         if (data.ok) {
           const conf = (config.get("confirmed") as boolean) || false;
-          setTriggerStatus({ msg: conf ? "Digest generated and sent!" : "Verification email sent!", ok: true });
+          if (!conf) {
+            // Verification email — done immediately
+            setGenerating(false);
+            setTriggerStatus({ msg: "Verification email sent!", ok: true });
+          } else {
+            // Digest is generating in background — keep spinner until it arrives via Yjs
+            setTriggerStatus({ msg: "Generating digest...", ok: true });
+          }
         } else {
+          setGenerating(false);
           setTriggerStatus({ msg: data.error || "Failed", ok: false });
         }
+      } else if (data.type === "trigger-error") {
+        setGenerating(false);
+        setTriggerStatus({ msg: data.error || "Digest generation failed", ok: false });
       }
     });
 

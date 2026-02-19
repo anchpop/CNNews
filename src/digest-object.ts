@@ -224,27 +224,17 @@ export class DigestObject extends YServer<Env> {
 
   async onAlarm(): Promise<void> {
     const shouldReschedule = this.isEnabled() && this.getFrequency() !== "manual";
-    if (!this.isConfirmed()) {
-      if (shouldReschedule) {
-        await this.scheduleNextAlarm();
-      }
-      return;
-    }
-    if (!this.roomName) {
-      console.error("Alarm fired but room name unknown — skipping digest");
-      if (shouldReschedule) {
-        await this.scheduleNextAlarm();
-      }
-      return;
-    }
-    try {
-      await this.runDigest();
-    } catch (e) {
-      console.error("Alarm digest failed:", e);
-    }
     if (shouldReschedule) {
       await this.scheduleNextAlarm();
     }
+    if (!this.isConfirmed() || !this.roomName) {
+      if (!this.roomName) console.error("Alarm fired but room name unknown — skipping digest");
+      return;
+    }
+    // Run digest in background so the DO can still handle WebSocket connections
+    this.ctx.waitUntil(
+      this.runDigest().catch((e) => console.error("Alarm digest failed:", e))
+    );
   }
 
   // --- Digest generation ---
@@ -368,18 +358,31 @@ export class DigestObject extends YServer<Env> {
       try {
         if (!this.isConfirmed()) {
           await this.sendVerification();
+          this.sendCustomMessage(
+            connection,
+            JSON.stringify({ type: "trigger-result", ok: true })
+          );
         } else {
           const now = Date.now();
           if (now - this.lastDigestGeneratedAt < 60_000) {
             throw new Error("Please wait 60 seconds between digest generations");
           }
           this.lastDigestGeneratedAt = now;
-          await this.runDigest();
+          // Send immediate ack, run digest in background so the DO stays responsive
+          this.sendCustomMessage(
+            connection,
+            JSON.stringify({ type: "trigger-result", ok: true })
+          );
+          this.ctx.waitUntil(
+            this.runDigest().catch((e) => {
+              console.error("Manual digest failed:", e);
+              this.sendCustomMessage(
+                connection,
+                JSON.stringify({ type: "trigger-error", error: e.message })
+              );
+            })
+          );
         }
-        this.sendCustomMessage(
-          connection,
-          JSON.stringify({ type: "trigger-result", ok: true })
-        );
       } catch (e: any) {
         this.sendCustomMessage(
           connection,
