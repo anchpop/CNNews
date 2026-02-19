@@ -103,6 +103,15 @@ export function App({ digestId }: { digestId: string }) {
       }
       setEnabled(en);
       setFrequency(freq);
+      const lastDigestSentAt = (config.get("lastDigestSentAt") as number) || 0;
+      if (lastDigestSentAt > 0 && Date.now() - lastDigestSentAt < 120_000) {
+        setGenerating(false);
+        setTriggerStatus({ msg: "Digest generated and sent!", ok: true });
+      } else if (lastDigestSentAt > 0) {
+        // Digest finished but older than 2 minutes — clear any stale status
+        setGenerating(false);
+        setTriggerStatus(null);
+      }
       const confirmedAt = (config.get("confirmedAt") as number) || 0;
       // Show banner on live transition OR if confirmed within last 2 minutes
       if (prevConfirmedRef.current !== null && conf && !prevConfirmedRef.current) {
@@ -119,15 +128,7 @@ export function App({ digestId }: { digestId: string }) {
     }
 
     function syncDigests() {
-      const newDigests = digestsArr.toArray();
-      setDigests((prev) => {
-        if (newDigests.length > prev.length) {
-          // A new digest arrived — clear generating state
-          setGenerating(false);
-          setTriggerStatus({ msg: "Digest generated and sent!", ok: true });
-        }
-        return newDigests;
-      });
+      setDigests(digestsArr.toArray());
     }
 
     provider.on("synced", () => {

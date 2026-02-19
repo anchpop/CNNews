@@ -327,6 +327,7 @@ export class DigestObject extends YServer<Env> {
       const arr = this.document.getArray("digests");
       arr.push([digest]);
       while (arr.length > MAX_DIGESTS) arr.delete(0, 1);
+      this.document.getMap("config").set("lastDigestSentAt", Date.now());
     });
 
     if (email) {
