@@ -6,7 +6,8 @@ export async function generateDigest(
   apiKey: string,
   topics: string[],
   previousDigests: Digest[],
-  dashboardUrl: string
+  dashboardUrl: string,
+  previousFunFacts: string[] = []
 ): Promise<Digest> {
   const model = "claude-sonnet-4-6";
   const client = new Anthropic({ apiKey });
@@ -129,18 +130,99 @@ Rules:
 
   const sources: DigestSource[] = Array.from(citationMap, ([url, title]) => ({ url, title }));
 
-  const html = renderDigestHtml(subject, sections, sources, today, dashboardUrl);
+  // Generate a fun fact in a separate request (max 3 web searches)
+  const funFact = await generateFunFact(client, topics, previousFunFacts);
 
-  return { date: today, subject, sections, sources, html };
+  const html = renderDigestHtml(subject, funFact, sections, sources, today, dashboardUrl);
+
+  return { date: today, subject, funFact, sections, sources, html };
+}
+
+async function generateFunFact(
+  client: Anthropic,
+  topics: string[],
+  previousFunFacts: string[]
+): Promise<string> {
+  const previousContext = previousFunFacts.length > 0
+    ? `\n\nPrevious fun facts (DO NOT repeat any of these):\n${previousFunFacts.map((f, i) => `${i + 1}. ${f}`).join("\n")}`
+    : "";
+
+  try {
+    const response = await client.beta.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 300,
+      betas: ["web-fetch-2025-09-10"],
+      tools: [
+        {
+          type: "web_search_20250305" as any,
+          name: "web_search",
+          max_uses: 3,
+        },
+      ],
+      system: `You are a fun fact researcher. The user is interested in: ${topics.join(", ")}.
+
+Pick ONE of these topics at random and find an obscure, surprising fun fact related to it. The reader is knowledgeable and motivated — avoid anything obvious or well-known. Dig for something genuinely surprising: a weird historical connection, a counterintuitive statistic, a strange origin story, an obscure record, etc.
+
+Be varied across calls — rotate topics, alternate between historical facts, science facts, cultural trivia, statistics, etc.${previousContext}
+
+Respond with ONLY the fun fact itself — one or two sentences, no preamble, no "Fun fact:" prefix, no quotation marks.`,
+      messages: [
+        { role: "user", content: "Find me an interesting fun fact." },
+      ],
+    });
+
+    let text = "";
+    for (const block of response.content) {
+      if (block.type === "text") text += block.text;
+    }
+
+    if (response.stop_reason === "pause_turn") {
+      // Tool use happened, need to continue
+      const response2 = await client.beta.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 300,
+        betas: ["web-fetch-2025-09-10"],
+        tools: [
+          {
+            type: "web_search_20250305" as any,
+            name: "web_search",
+            max_uses: 0,
+          },
+        ],
+        system: `Respond with ONLY the fun fact — one or two sentences, no preamble.`,
+        messages: [
+          { role: "user", content: "Find me an interesting fun fact." },
+          { role: "assistant", content: response.content },
+          { role: "user", content: "Please give me the fun fact now." },
+        ],
+      });
+      text = "";
+      for (const block of response2.content) {
+        if (block.type === "text") text += block.text;
+      }
+    }
+
+    return text.trim();
+  } catch (e) {
+    console.error("Fun fact generation failed:", e);
+    return "";
+  }
 }
 
 function renderDigestHtml(
   subject: string,
+  funFact: string,
   sections: DigestSection[],
   sources: DigestSource[],
   date: string,
   dashboardUrl: string
 ): string {
+  const funFactHtml = funFact ? `
+    <div style="margin-bottom:24px;padding:16px 20px;background:#fef9f0;border-left:4px solid #e67e22;border-radius:0 8px 8px 0;">
+      <p style="color:#b45309;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 6px 0;">Did you know?</p>
+      <p style="color:#92400e;font-size:14px;line-height:1.6;margin:0;">${escapeHtml(funFact)}</p>
+    </div>` : "";
+
   const sectionHtml = sections
     .map(
       (s) => `
@@ -169,6 +251,7 @@ function renderDigestHtml(
         <h1 style="color:#1a1a2e;font-size:24px;margin:0 0 4px 0;">${escapeHtml(subject)}</h1>
         <p style="color:#888;font-size:13px;margin:0;">${date} &middot; CN News Daily Digest</p>
       </div>
+      ${funFactHtml}
       ${sectionHtml}
       ${sourcesHtml}
       <div style="text-align:center;padding-top:20px;border-top:1px solid #f0f0f0;">

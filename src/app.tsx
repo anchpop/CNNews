@@ -26,6 +26,7 @@ interface DigestSource {
 interface DigestEntry {
   date: string;
   subject: string;
+  funFact?: string;
   sections: DigestSection[];
   sources?: DigestSource[];
 }
@@ -467,6 +468,12 @@ export function App({ digestId }: { digestId: string }) {
                       </CollapsibleTrigger>
                       <CollapsibleContent>
                         <div className="bg-background rounded-lg p-3 mb-4 text-sm leading-relaxed digest-prose">
+                          {d.funFact && (
+                            <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-950/30 border-l-4 border-amber-400 rounded-r-lg">
+                              <div className="text-amber-700 dark:text-amber-300 text-xs font-bold uppercase tracking-wide mb-1">Did you know?</div>
+                              <div className="text-amber-900 dark:text-amber-200 text-sm">{d.funFact}</div>
+                            </div>
+                          )}
                           {d.sections.map((s, si) => (
                             <div key={si}>
                               <div className="text-primary font-semibold mt-3 mb-1 first:mt-0">

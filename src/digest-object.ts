@@ -321,12 +321,16 @@ export class DigestObject extends YServer<Env> {
 
     const digests = this.getDigests();
     const context = digests.slice(-DIGEST_CONTEXT_COUNT);
+    const previousFunFacts = digests
+      .map((d) => d.funFact)
+      .filter((f): f is string => !!f);
 
     const digest = await generateDigest(
       this.env.ANTHROPIC_API_KEY,
       topics,
       context,
-      this.getDashboardUrl()
+      this.getDashboardUrl(),
+      previousFunFacts
     );
 
     this.document.transact(() => {

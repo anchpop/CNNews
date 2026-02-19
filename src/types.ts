@@ -11,6 +11,7 @@ export interface DigestSource {
 export interface Digest {
   date: string;
   subject: string;
+  funFact?: string;
   sections: DigestSection[];
   sources: DigestSource[];
   html: string;
